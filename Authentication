@@ -1,0 +1,320 @@
+//email verification
+import 'dart:async';
+
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:get/get.dart';
+
+import '../../../../common/widget_login_signup/srccess_screen.dart';
+import '../../../../data/data.repository.authentication_repository.dart';
+import '../../../../utils/constants/image_strings.dart';
+import '../../../../utils/constants/text_strings.dart';
+import '../../../../utils/popups/loaders.dart';
+
+class VerifyEmailController extends GetxController {
+  static VerifyEmailController get instance => Get.find();
+
+  @override
+  @override
+  void onInit() {
+    sendEmailVerification(); // Optional now since sent from signup
+    setTimerForAutoRedirect();
+    super.onInit();
+  }
+
+
+  /// Manual resend
+  Future<void> sendEmailVerification() async {
+    try {
+      await FirebaseAuth.instance.currentUser?.sendEmailVerification();
+      TLoaders.successSnackBar(
+        title: 'Email Sent',
+        message: 'Please check your inbox and verify your email.',
+      );
+    } catch (e) {
+      TLoaders.errorSnackBar(
+        title: 'Oh Snap!',
+        message: e.toString(),
+      );
+    }
+  }
+
+  /// Timer for auto-redirect
+  void setTimerForAutoRedirect() {
+    Timer.periodic(const Duration(seconds: 1), (timer) async {
+      await FirebaseAuth.instance.currentUser?.reload();
+      final user = FirebaseAuth.instance.currentUser;
+
+      if (user?.emailVerified ?? false) {
+        timer.cancel();
+        Get.off(() => SuccessScreen(
+          image: TImages.successfulPaymentIcon,
+          title: TTexts.yourAccountCreatedTitle,
+          subTitle: TTexts.yourAccountCreatedSubTitle,
+          onPressed: () => AuthenticationRepository.instance.screenRedirect(),
+        ));
+      }
+    });
+  }
+
+  /// Manual "Continue" check
+  Future<void> checkEmailVerificationStatus() async {
+    await FirebaseAuth.instance.currentUser?.reload();
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user != null && user.emailVerified) {
+      Get.off(() => SuccessScreen(
+        image: TImages.successfulPaymentIcon,
+        title: TTexts.yourAccountCreatedTitle,
+        subTitle: TTexts.yourAccountCreatedSubTitle,
+        onPressed: () => AuthenticationRepository.instance.screenRedirect(),
+      ));
+    } else {
+      TLoaders.warningSnackBar(
+        title: 'Email Not Verified',
+        message: 'Please verify your email to continue.',
+      );
+    }
+  }
+}
+
+//login
+
+import 'package:agrocart/features/personalization/controllers/user_ccontroller.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
+import 'package:get/get.dart';
+import 'package:get_storage/get_storage.dart';
+import 'package:google_sign_in/google_sign_in.dart';
+import '../../../../data/data.repository.authentication_repository.dart';
+import '../../../../utils/constants/image_strings.dart';
+import '../../../../utils/helpers/network_manager.dart';
+import '../../../../utils/popups/full_screen_loader.dart';
+import '../../../../utils/popups/loaders.dart';
+class LoginController extends GetxController {
+  final rememberMe = false.obs;
+  final hidePassword = true.obs;
+  final localStorage = GetStorage();
+  final email = TextEditingController();
+  final password = TextEditingController();
+  final userController = Get.put(UserController());
+  GlobalKey<FormState> loginFormKey = GlobalKey<FormState>();
+  @override
+  void onInit(){
+    super.onInit();
+    email.text=localStorage.read('REMEMBER_ME_EMAIL')?? '';
+    password.text=localStorage.read('REMEMBER_ME_PASSWORD')?? '';
+  }
+  Future<void> emailAndPasswordSignIn() async {
+    try {
+      
+      TFullScreenLoader.openLoadingDialog(
+        'Logging you in...',
+        TImages.dockerAnimation,
+      );
+      final isConnected = await NetworkManager.instance.isConnected();
+      if (!isConnected) {
+        TFullScreenLoader.stopLoading();
+        Get.snackbar("No Internet", "Please check your connection.");
+        return;
+      }
+
+      
+      if (!loginFormKey.currentState!.validate()) {
+        TFullScreenLoader.stopLoading();
+        return;
+      }
+
+      
+      if (rememberMe.value) {
+        localStorage.write('REMEMBER_ME_EMAIL', email.text.trim());
+        localStorage.write('REMEMBER_ME_PASSWORD', password.text.trim());
+      }
+
+     
+      final userCredentials = await AuthenticationRepository.instance
+          .loginWithEmailAndPassword(email.text.trim(), password.text.trim());
+
+      
+      TFullScreenLoader.stopLoading();
+
+      
+      AuthenticationRepository.instance.screenRedirect();
+    } catch (e) {
+      
+      TFullScreenLoader.stopLoading();
+      Get.snackbar("Login Failed", e.toString());
+    }
+  }
+
+  Future<void> googleSignIn() async {
+    try {
+      
+      TFullScreenLoader.openLoadingDialog('Logging you in...', TImages.dockerAnimation);
+
+      
+      final isConnected = await NetworkManager.instance.isConnected();
+      if (!isConnected) {
+        TFullScreenLoader.stopLoading();
+        TLoaders.errorSnackBar(title: 'No Internet', message: 'Please check your internet connection.');
+        return;
+      }
+
+      
+      final GoogleSignIn googleSignIn = GoogleSignIn();
+
+      
+      await googleSignIn.signOut();
+
+      
+      final GoogleSignInAccount? googleUser = await googleSignIn.signIn();
+
+      if (googleUser == null) {
+        
+        TFullScreenLoader.stopLoading();
+        return;
+      }
+
+      
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+
+      
+      final OAuthCredential credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+
+      
+      final UserCredential userCredentials = await FirebaseAuth.instance.signInWithCredential(credential);
+
+     
+      await userController.saveUserRecord(userCredentials);
+
+      
+      TFullScreenLoader.stopLoading();
+      AuthenticationRepository.instance.screenRedirect();
+    } catch (e) {
+      
+      TFullScreenLoader.stopLoading(); 
+      TLoaders.errorSnackBar(title: 'Oh Snap', message: e.toString());
+      if (kDebugMode) {
+        print('Error during Google sign-in: $e');
+      }
+    }
+  }
+
+
+
+}
+
+// sign up
+
+import 'package:agrocart/data/data.repository.authentication_repository.dart';
+import 'package:agrocart/data/repository/user/userrepository.dart';
+import 'package:agrocart/utils/popups/loaders.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:get/get.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+
+import '../../../../data/repository/user/usermodel.dart';
+import '../../../../utils/constants/image_strings.dart';
+import '../../../../utils/helpers/network_manager.dart';
+import '../../../../utils/popups/full_screen_loader.dart';
+import '../../screens/signup/verify_email.dart';
+
+class SignupController extends GetxController {
+  static SignupController get instance => Get.find();
+
+  final hidePassword = true.obs;
+  final privacyPolicy = true.obs;
+
+  final email = TextEditingController();
+  final lastName = TextEditingController();
+  final username = TextEditingController();
+  final password = TextEditingController();
+  final firstName = TextEditingController();
+  final phoneNumber = TextEditingController();
+
+  GlobalKey<FormState> signupFormKey = GlobalKey<FormState>();
+
+  Future<void> signup() async {
+    try {
+      TFullScreenLoader.openLoadingDialog(
+        'We are processing your information...',
+        TImages.dockerAnimation,
+      );
+
+      
+      final isConnected = await NetworkManager.instance.isConnected();
+      if (!isConnected) {
+        TFullScreenLoader.stopLoading();
+        TLoaders.warningSnackBar(
+          title: 'No Internet',
+          message: 'Please check your connection and try again.',
+        );
+        return;
+      }
+
+      
+      if (!signupFormKey.currentState!.validate()) {
+        TFullScreenLoader.stopLoading();
+        return;
+      }
+
+      
+      if (!privacyPolicy.value) {
+        TFullScreenLoader.stopLoading();
+        TLoaders.warningSnackBar(
+          title: 'Accept Privacy Policy',
+          message: 'You must accept the Privacy Policy & Terms to continue.',
+        );
+        return;
+      }
+
+      
+      final userCredential = await AuthenticationRepository.instance.registerWithEmailAndPassword(
+        email.text.trim(),
+        password.text.trim(),
+      );
+
+      
+      await FirebaseAuth.instance.currentUser?.reload();
+      final user = FirebaseAuth.instance.currentUser;
+
+      if (user != null && !user.emailVerified) {
+        await user.sendEmailVerification();
+      }
+
+      
+      final newUser = UserModel(
+        id: user!.uid,
+        firstName: firstName.text.trim(),
+        lastName: lastName.text.trim(),
+        username: username.text.trim(),
+        email: email.text.trim(),
+        phoneNumber: phoneNumber.text.trim(),
+        profilePicture: '',
+      );
+
+      final userRepository = Get.put(UserRepository());
+      await userRepository.saveUserRecord(newUser);
+
+      
+      TFullScreenLoader.stopLoading();
+      TLoaders.successSnackBar(
+        title: "Success",
+        message: "Account created successfully. Please verify your email.",
+      );
+
+      Get.to(() => VerifyEmail(email: email.text.trim()));
+
+    } catch (e) {
+      TFullScreenLoader.stopLoading();
+      TLoaders.errorSnackBar(
+        title: 'Signup Failed',
+        message: e.toString(),
+      );
+    }
+  }
+}
+
